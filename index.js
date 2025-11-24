@@ -46,7 +46,7 @@ const cartCollection = db.collection('cart')
 
 // GET Example
 app.get("/", (req, res) => {
-  res.send("Backend is running...");
+  res.json("Backend is running...");
 });
 
 
@@ -57,19 +57,19 @@ async function run() {
     // get products (Public Route - No Auth Required)
     app.get('/products', async (req, res) => {
       const result = await productCollection.find().toArray();
-      res.send(result)
+      res.json(result)
     })
 
     // get trending products (Public Route - No Auth Required)
     app.get('/top-products', async (req, res) => {
       const result = await productCollection.find().limit(6).toArray();
-      res.send(result)
+      res.json(result)
     })
 
     app.get('/products/:id', async (req, res) => {
       const id = req.params.id;
       const result = await productCollection.findOne({ _id: new ObjectId(id) })
-      res.send(result)
+      res.json(result)
     })
 
     // POST products (Protected Route - Uses checkJwt middleware)
@@ -88,13 +88,13 @@ async function run() {
         };
 
         const result = await productCollection.insertOne(productData);
-        res.status(201).send({
+        res.status(201).json({
           message: "Product added successfully",
           insertedId: result.insertedId
         });
       } catch (error) {
         console.error("MongoDB Insert Error:", error);
-        res.status(500).send({ message: "Failed to save product to database." });
+        res.status(500).json({ message: "Failed to save product to database." });
       }
     });
 
@@ -111,11 +111,11 @@ async function run() {
           { returnDocument: "after" }
         );
 
-        if (!result) return res.status(404).send({ message: "Product not found" });
+        if (!result) return res.status(404).json({ message: "Product not found" });
 
-        res.send(result);
+        res.json(result);
       } catch (err) {
-        res.status(500).send({ message: err.message });
+        res.status(500).json({ message: err.message });
       }
     });
 
@@ -160,9 +160,9 @@ async function run() {
           .find({ _id: { $in: productIds.map(id => new ObjectId(id)) } })
           .toArray();
 
-        res.send(products);
+        res.json(products);
       } catch (err) {
-        res.status(500).send({ message: err.message });
+        res.status(500).json({ message: err.message });
       }
     });
 
@@ -184,7 +184,7 @@ async function run() {
             { _id: existing._id },
             { $inc: { quantity } }
           );
-          return res.send({ message: "Quantity updated" });
+          return res.json({ message: "Quantity updated" });
         }
 
         // Add new item
@@ -195,9 +195,9 @@ async function run() {
           createdAt: new Date()
         });
 
-        res.send({ message: "Added to cart", result });
+        res.json({ message: "Added to cart", result });
       } catch (err) {
-        res.status(500).send({ message: err.message });
+        res.status(500).json({ message: err.message });
       }
     });
 
@@ -210,9 +210,9 @@ async function run() {
           .find({ userId })
           .toArray();
 
-        res.send(items);
+        res.json(items);
       } catch (err) {
-        res.status(500).send({ message: err.message });
+        res.status(500).json({ message: err.message });
       }
     });
 
@@ -228,9 +228,9 @@ async function run() {
           { $set: { quantity } }
         );
 
-        res.send({ message: "Cart updated", result });
+        res.json({ message: "Cart updated", result });
       } catch (err) {
-        res.status(500).send({ message: err.message });
+        res.status(500).json({ message: err.message });
       }
     });
 
@@ -241,14 +241,14 @@ async function run() {
         const result = await cartCollection.deleteOne({
           _id: new ObjectId(req.params.id),
         });
-        res.send({ message: "Item removed", result });
+        res.json({ message: "Item removed", result });
       } catch (err) {
-        res.status(500).send({ message: err.message });
+        res.status(500).json({ message: err.message });
       }
     });
 
 
-
+    app.listen(port, () => console.log(`Server running on port :${port}`));
 
 
 
@@ -257,15 +257,14 @@ async function run() {
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+
   }
 }
-run().catch(console.dir);
-
+run();
+// .catch(console.dir);
 
 // Server running
-app.listen(port, () => console.log(`Server running on port :${port}`));
+// 
 
 
 
