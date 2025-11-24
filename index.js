@@ -1,82 +1,267 @@
 import express from "express";
-const app = express();
 import cors from "cors";
 import { MongoClient, ObjectId, ServerApiVersion } from "mongodb";
 import dotenv from "dotenv";
+import { auth } from 'express-oauth2-jwt-bearer'; // <-- NEW: Import JWT checker
 
+const app = express();
 const port = process.env.PORT || 5000;
 
 dotenv.config();
 
-
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Connection
 
+
+
+const CLERK_AUDIENCE = 'YOUR_AUDIENCE_FROM_CLERK';
+
+
+const CLERK_ISSUER = 'https://clerk.your-domain.com';
+
+
+const checkJwt = auth({
+  audience: CLERK_AUDIENCE,
+  issuerBaseURL: CLERK_ISSUER,
+});
+
+
+
+// MongoDB Connection
 const uri = process.env.MONGO_URI;
 
 const client = new MongoClient(uri, {
-    serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
-    }
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
 });
 
 
 const db = client.db("NexCart");
 const productCollection = db.collection("products");
+const cartCollection = db.collection('cart')
 
 // GET Example
 app.get("/", (req, res) => {
-    res.send("Backend is running...");
+  res.send("Backend is running...");
 });
 
 
-
 async function run() {
-    try {
-        // Connect the client to the server	(optional starting in v4.7)
-        await client.connect();
+  try {
+    await client.connect();
 
-        // get products
-        app.get('/products', async (req, res) => {
-            const result = await productCollection.find().toArray();
-            res.send(result)
-        })
+    // get products (Public Route - No Auth Required)
+    app.get('/products', async (req, res) => {
+      const result = await productCollection.find().toArray();
+      res.send(result)
+    })
 
-        // get trending products
-         app.get('/top-products', async (req, res) => {
-            const result = await productCollection.find().limit(6).toArray();
-            res.send(result)
-        })
+    // get trending products (Public Route - No Auth Required)
+    app.get('/top-products', async (req, res) => {
+      const result = await productCollection.find().limit(6).toArray();
+      res.send(result)
+    })
 
-          app.get('/products/:id', async (req, res) => {
-            const id = req.params.id;
-            const result = await productCollection.findOne({_id: new ObjectId(id)})
-            res.send(result)
-        })
+    app.get('/products/:id', async (req, res) => {
+      const id = req.params.id;
+      const result = await productCollection.findOne({ _id: new ObjectId(id) })
+      res.send(result)
+    })
 
-        // POST products
-        app.post("/products", async (req, res) => {
-            const result = await productCollection.insertOne(req.body);
-            res.send(result);
+    // POST products (Protected Route - Uses checkJwt middleware)
+    // If the JWT token is invalid, this route will automatically return a 401 Unauthorized error.
+    app.post("/products", async (req, res) => {
+
+
+
+      try {
+        // Ensure data fields match the frontend submission
+        const productData = {
+          ...req.body,
+          // Optionally: Add the user ID who created the product
+          // creatorId: clerkUserId, 
+          createdAt: new Date()
+        };
+
+        const result = await productCollection.insertOne(productData);
+        res.status(201).send({
+          message: "Product added successfully",
+          insertedId: result.insertedId
+        });
+      } catch (error) {
+        console.error("MongoDB Insert Error:", error);
+        res.status(500).send({ message: "Failed to save product to database." });
+      }
+    });
+
+
+
+    // update api
+
+
+    app.put("/products/:id", async (req, res) => {
+      try {
+        const result = await productCollection.findOneAndUpdate(
+          { _id: new ObjectId(req.params.id) },
+          { $set: req.body },
+          { returnDocument: "after" }
+        );
+
+        if (!result) return res.status(404).send({ message: "Product not found" });
+
+        res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: err.message });
+      }
+    });
+
+
+
+
+    // Delete api
+
+
+    app.delete("/products/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        console.log("Deleting product:", id);
+
+        const result = await db.collection("products").deleteOne({
+          _id: new ObjectId(id)
         });
 
+        if (result.deletedCount === 0) {
+          return res.status(404).json({ message: "Product not found" });
+        }
+
+        res.json({ message: "Product deleted successfully" });
+
+      } catch (error) {
+        console.error("Delete error:", error);
+        res.status(500).json({ message: error.message });
+      }
+    });
 
 
 
-        // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
-    } finally {
-        // Ensures that the client will close when you finish/error
-        // await client.close();
-    }
+    // Cart related api
+
+    // products by secondary id
+    // POST /products/by-ids
+    app.post("/products/by-ids", async (req, res) => {
+      try {
+        const { productIds } = req.body;
+
+        const products = await productCollection
+          .find({ _id: { $in: productIds.map(id => new ObjectId(id)) } })
+          .toArray();
+
+        res.send(products);
+      } catch (err) {
+        res.status(500).send({ message: err.message });
+      }
+    });
+
+    // add on cart
+
+    app.post("/cart", async (req, res) => {
+      try {
+        const { userId, productId, quantity } = req.body;
+
+        // Check if already in cart
+        const existing = await cartCollection.findOne({
+          userId,
+          productId
+        });
+
+        if (existing) {
+          // Increase quantity
+          const result = await cartCollection.updateOne(
+            { _id: existing._id },
+            { $inc: { quantity } }
+          );
+          return res.send({ message: "Quantity updated" });
+        }
+
+        // Add new item
+        const result = await cartCollection.insertOne({
+          userId,
+          productId,
+          quantity,
+          createdAt: new Date()
+        });
+
+        res.send({ message: "Added to cart", result });
+      } catch (err) {
+        res.status(500).send({ message: err.message });
+      }
+    });
+
+    // get cart api
+    app.get("/cart/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+
+        const items = await cartCollection
+          .find({ userId })
+          .toArray();
+
+        res.send(items);
+      } catch (err) {
+        res.status(500).send({ message: err.message });
+      }
+    });
+
+
+    // update cart item
+    app.put("/cart/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { quantity } = req.body;
+
+        const result = await cartCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { quantity } }
+        );
+
+        res.send({ message: "Cart updated", result });
+      } catch (err) {
+        res.status(500).send({ message: err.message });
+      }
+    });
+
+
+    // delete cart item 
+    app.delete("/cart/:id", async (req, res) => {
+      try {
+        const result = await cartCollection.deleteOne({
+          _id: new ObjectId(req.params.id),
+        });
+        res.send({ message: "Item removed", result });
+      } catch (err) {
+        res.status(500).send({ message: err.message });
+      }
+    });
+
+
+
+
+
+
+
+    // Send a ping to confirm a successful connection
+    await client.db("admin").command({ ping: 1 });
+    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+  } finally {
+    // Ensures that the client will close when you finish/error
+    // await client.close();
+  }
 }
 run().catch(console.dir);
-
 
 
 // Server running
@@ -85,130 +270,3 @@ app.listen(port, () => console.log(`Server running on port :${port}`));
 
 
 
-/**
- * const express = require("express");
-const cors = require("cors");
-const jwt = require("jsonwebtoken");
-require("dotenv").config();
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// ------------------------
-// Fake Database (You can replace with MongoDB later)
-// ------------------------
-let users = [];
-let products = [];
-
-// ------------------------
-// JWT Middleware
-// ------------------------
-function verifyJWT(req, res, next) {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader) {
-    return res.status(401).send({ message: "Unauthorized access" });
-  }
-
-  const token = authHeader.split(" ")[1];
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-    if (err) {
-      return res.status(403).send({ message: "Forbidden access" });
-    }
-    req.user = decoded;
-    next();
-  });
-}
-
-// ------------------------
-// Auth Routes
-// ------------------------
-
-// REGISTER
-app.post("/api/register", (req, res) => {
-  const { name, email, password } = req.body;
-
-  const existing = users.find((u) => u.email === email);
-  if (existing) return res.send({ error: "User already exists" });
-
-  const newUser = { id: Date.now(), name, email, password };
-  users.push(newUser);
-
-  res.send({ message: "User registered", user: newUser });
-});
-
-// LOGIN
-app.post("/api/login", (req, res) => {
-  const { email, password } = req.body;
-
-  const user = users.find((u) => u.email === email && u.password === password);
-  if (!user) return res.status(400).send({ error: "Invalid credentials" });
-
-  const token = jwt.sign({ email: user.email, id: user.id }, process.env.JWT_SECRET, {
-    expiresIn: "1d",
-  });
-
-  res.send({ message: "Login successful", token, user });
-});
-
-// ------------------------
-// Product Routes
-// ------------------------
-
-// GET ALL PRODUCTS
-app.get("/api/products", (req, res) => {
-  res.send(products);
-});
-
-// GET SINGLE PRODUCT
-app.get("/api/products/:id", (req, res) => {
-  const id = parseInt(req.params.id);
-  const product = products.find((p) => p.id === id);
-
-  if (!product) return res.status(404).send({ message: "Product not found" });
-
-  res.send(product);
-});
-
-// ADD PRODUCT (protected)
-app.post("/api/products", verifyJWT, (req, res) => {
-  const { title, shortDesc, fullDesc, price, image } = req.body;
-
-  const newProduct = {
-    id: Date.now(),
-    title,
-    shortDesc,
-    fullDesc,
-    price,
-    image,
-    createdBy: req.user.email,
-  };
-
-  products.push(newProduct);
-
-  res.send({ message: "Product added", product: newProduct });
-});
-
-// DELETE PRODUCT (protected)
-app.delete("/api/products/:id", verifyJWT, (req, res) => {
-  const id = parseInt(req.params.id);
-  products = products.filter((p) => p.id !== id);
-  res.send({ message: "Product deleted" });
-});
-
-// ------------------------
-// Root Route
-// ------------------------
-app.get("/", (req, res) => {
-  res.send("🚀 NexCart Server Running");
-});
-
-// ------------------------
-// Start Server
-// ------------------------
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
- */
