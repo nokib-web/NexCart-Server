@@ -39,6 +39,10 @@ const client = new MongoClient(uri, {
   }
 });
 
+await client.db("admin").command({ ping: 1 });
+console.log("Pinged your deployment. You successfully connected to MongoDB!");
+
+
 
 const db = client.db("NexCart");
 const productCollection = db.collection("products");
@@ -254,13 +258,13 @@ async function run() {
 
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+
   } finally {
 
   }
 }
-run();
+run()
+
 // .catch(console.dir);
 
 // Server running
