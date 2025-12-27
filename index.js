@@ -55,6 +55,7 @@ const productCollection = db.collection("products");
 const cartCollection = db.collection('cart')
 const userCollection = db.collection('users');
 const orderCollection = db.collection('orders');
+const reviewCollection = db.collection('reviews');
 
 // verify admin middleware
 // verify admin middleware
@@ -161,8 +162,61 @@ async function run() {
 
     // get products (Public Route - No Auth Required)
     app.get('/products', async (req, res) => {
-      const result = await productCollection.find().toArray();
-      res.json(result)
+      try {
+        const { search, category, brand, minPrice, maxPrice, sort } = req.query;
+        const query = {};
+
+        if (search) {
+          query.$or = [
+            { name: { $regex: search, $options: 'i' } },
+            { category: { $regex: search, $options: 'i' } }
+          ];
+        }
+
+        if (category && category !== 'All') {
+          query.category = category;
+        }
+
+        if (brand) {
+          query.brand = brand;
+        }
+
+        if (minPrice || maxPrice) {
+          query.price = {};
+          if (minPrice) query.price.$gte = parseFloat(minPrice);
+          if (maxPrice) query.price.$lte = parseFloat(maxPrice);
+        }
+
+        let sortOptions = {};
+        if (sort === 'price-asc') sortOptions.price = 1;
+        else if (sort === 'price-desc') sortOptions.price = -1;
+        else if (sort === 'newest') sortOptions.createdAt = -1;
+
+        // Pagination Logic
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 12; // Default 12 products
+        const skip = (page - 1) * limit;
+
+        const totalProducts = await productCollection.countDocuments(query);
+        const totalPages = Math.ceil(totalProducts / limit);
+
+        const products = await productCollection
+          .find(query)
+          .sort(sortOptions)
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        res.json({
+          products,
+          totalProducts,
+          totalPages,
+          currentPage: page
+        });
+      } catch (error) {
+        console.error("Error fetching products:", error);
+        res.status(500).json({ message: "Failed to fetch products" });
+      }
     })
 
     // get trending products (Public Route - No Auth Required)
@@ -252,6 +306,30 @@ async function run() {
       }
     });
 
+    // Reviews APIs
+    app.post("/reviews", async (req, res) => {
+      try {
+        const review = req.body;
+        const result = await reviewCollection.insertOne({
+          ...review,
+          createdAt: new Date()
+        });
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ message: error.message });
+      }
+    });
+
+    app.get("/reviews/:productId", async (req, res) => {
+      try {
+        const productId = req.params.productId;
+        const result = await reviewCollection.find({ productId }).sort({ createdAt: -1 }).toArray();
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ message: error.message });
+      }
+    });
+
 
 
     // Cart related api
@@ -276,13 +354,17 @@ async function run() {
 
     app.post("/cart", async (req, res) => {
       try {
-        const { userId, productId, quantity } = req.body;
+        const { userId, productId, quantity, size, color } = req.body;
 
-        // Check if already in cart
-        const existing = await cartCollection.findOne({
+        // Check if already in cart (same product AND same variant)
+        const checkQuery = {
           userId,
-          productId
-        });
+          productId,
+          size: size || null,
+          color: color || null
+        };
+
+        const existing = await cartCollection.findOne(checkQuery);
 
         if (existing) {
           // Increase quantity
@@ -298,8 +380,11 @@ async function run() {
           userId,
           productId,
           quantity,
+          size: size || null,
+          color: color || null,
           createdAt: new Date()
         });
+
 
         res.json({ message: "Added to cart", result });
       } catch (err) {
@@ -405,6 +490,17 @@ async function run() {
 
       const result = await orderCollection.find(query).toArray();
       res.json(result);
+    });
+
+    app.get("/orders/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await orderCollection.findOne({ _id: new ObjectId(id) });
+        if (!result) return res.status(404).json({ message: "Order not found" });
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ message: error.message });
+      }
     });
 
 
